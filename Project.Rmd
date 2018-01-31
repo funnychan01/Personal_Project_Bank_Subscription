@@ -1,0 +1,899 @@
+---
+title: "What Kinds of Clients Will Subscribe a Bank's Term Deposit by Phone Calls?"
+author: "Chan Lit King, Jackie"
+date: "January 10, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = F, error = F, warning = F, cache = T,
+                      fig.height = 6, fig.width = 8, fig.align = "center")
+```
+
+* Link of graphical presentation : https://rpubs.com/funnychan01/348990
+
+# Content
+#####1.Background & Data Preparation
+######1.1 Background of This Project
+######1.2 Data Source
+######1.3 Load the Dataset
+######1.4 Load Required Packages
+######1.5 Functions Created for this Project
+######1.6 Split the Data into Training Dataset and Testing Dataset
+######1.7 Basic Exploratory Data Analysis
+######1.8 Data Preparation
+######1.9 Basic Data Transformation
+
+#####2.Exploratory Data Analysis
+######2.1 Bar Charts of Categorical Variables with Ad-hoc A/B Test and Chi-Squared Test
+######2.2 Histograms of Continuous Variables with Ad-hoc A/B Test
+
+#####3.Modelling
+######3.1 Finalize the Dataset for Training and Testing
+######3.2 Use Logistic Regression to Fit the Model - Initial Model
+######3.3 Variables Selection Using Backward Elimination - Improved Model
+######3.4 Assess and Interpret the Model
+######3.5 Assess the Model with Cumulative Accuracy Profile(CAP) Curve
+
+#####4.Insights & Conclusion
+######4.1 Insights from the Logistic Regression Model
+######4.2 Insights from the CAP Curve
+
+#####5.Source of Reference
+
+# 1.Background & Data Preparation
+
+### 1.1 Background of this project
+The data is about direct marketing campaigns (phone calls) of a Portuguese banking institution from May 2008 to November 2010. The clients were contacted more than once in order to access if the product (bank term deposit) would be ('yes') or not ('no') subscribed. 
+
+##### The goal of this project:
+* to classify and predict whether the client will subscribe (yes/no) a term deposit
+* to improve the stragegy for the next market campaign
+* to draw business insights from the data
+
+##### Variable description:
+###### Bank client data:
+* Age (numeric)
+* JobType : type of job
+* Marital : marital status
+* Education
+* CreditDefault: has credit in default? ("yes","no")
+* AvgYearlyBbalance: average yearly balance, in euros 
+* HousingLoan: has housing loan? ("yes","no")
+* PersonalLoan: has personal loan? "yes","no")
+
+###### Related with the last contact of the current campaign:
+* ContactType: contact communication type
+* Day: last contact day of the month
+* Month: last contact month of year
+* Duration: last contact duration, in seconds (numeric)
+
+###### Other variables:
+* NumOfContacts: number of contacts performed during this campaign and for this client
+* PassedDays: number of days that passed by after the client was last contacted from a previous campaign (-1 means client was not previously contacted)
+* Previous: number of contacts performed before this campaign and for this client 
+* PreviousOutcome: outcome of the previous marketing campaign
+
+###### Output variable (desired target):
+* Subscription - has the client subscribed a term deposit? ("yes","no")
+
+### 1.2 Data Source: 
+1. Link: http://archive.ics.uci.edu/ml/datasets/Bank+Marketing
+2. From the 'Data Folder', download the 'bank.zip'
+3. Unzip 'bank.zip'
+4. Get the 'bank-full.csv' for this project
+
+### 1.3 Load the Dataset
+```{r}
+Bank_PhoneCalls <- read.table("D:\\Jackie\\Documents\\Data Science Projects\\20180111 Bank_PhoneCalls_Subscription\\3. Uploaded Data\\20180111\\bank-full.csv", header = T, sep = ";")
+
+colnames(Bank_PhoneCalls) <- c("Age", "JobType", "Marital", "Education", "CreditDefault", "AvgYearlyBalance", "HousingLoan", "PersonalLoan", "ContactType","Day", "Month","Duration", "NumOfContacts", "PassedDays", "Previous", "PreviousOutcome", "Subscription") #Converting to meaningful variable names
+```
+
+### 1.4 Load Required Packages
+```{r}
+library(tidyverse)
+library(scales)
+library(gridExtra)
+library(caret)
+library(dummies)
+```
+
+### 1.5 Split the Data into Training Dataset and Testing Dataset
+* The original dataset will be splited.
+* 80% of it will be the training set.
+* 20% of it will be the testing set for assessing the model performance.
+* Throughout this project, the training set will be used for exploratory data analysis, model buidling and fitting, and drawing insights.
+```{r}
+set.seed(100)
+index <- createDataPartition(y = Bank_PhoneCalls$Subscription, p = 0.8, list = F)
+Raw_Training <- Bank_PhoneCalls[index,]
+Raw_Testing <- Bank_PhoneCalls[-index,]
+
+identical((nrow(Raw_Training) + nrow(Raw_Testing)), nrow(Bank_PhoneCalls))  #Checked the number of observations matched
+```
+
+### 1.6 Functions Created for this Project
+```{r}
+reorder_size <- function(x) {           #For sorting the bar chart
+        factor(x, levels = names(sort(table(x))))
+}
+
+xsq_test <- function(x, y = Wrk_Training$Subscription) {
+        TableForTest <- table(x, y)
+        XsqResults <- chisq.test(TableForTest)
+        pvalue <- XsqResults$p.value
+        print(XsqResults)
+        if (pvalue < 0.05) {
+                print("This is a statistical significant result. This variable plays an important role in the decision of clients to subscribe or not to subscribe the bank's term deposit")
+        } else {
+                print("This is NOT a statistical significant result. This variable DOES NOT play an important role in the decision of clients to subscribe or not to subscribe the bank's term deposit")
+        }
+}
+
+
+```
+
+### 1.7 Basic Exploratory Data Analysis
+```{r}
+head(Raw_Training)           #Looking at the top 6 rows of the dataset
+tail(Raw_Training)           #Looking at the bottom 6 rows of the dataset
+str(Raw_Training)            #Overall structure of the dataset
+summary(Raw_Training)        #Summary statistics of the dataset
+```
+
+What does "unknown" mean in the column of PreviousOutcome?
+```{r}
+nrow(Raw_Training[Raw_Training$PassedDays == -1,]) 
+#29574 clients were not previously contacted
+
+nrow(Raw_Training[Raw_Training$PreviousOutcome == "unknown",]) 
+#29578 unknown results of the previous marketing campaign's outcome. The number matches with clients who were not previously contacted, with 4 exceptions. 
+```
+
+Three distinct periods addressing the number of contacts of the current market campaign:
+
+* High Season - Period with high contact number: May to Aug
+* Medium Season - Period with medium contact number: Feb, Apr, Nov
+* Low Season - Period with low contact number: Jan, Mar, Sept, Oct, Dec
+
+```{r}
+ggplot(data = Raw_Training, aes(x = reorder_size(Month), 
+                                y = NumOfContacts, 
+                                color = Subscription)) +
+        geom_point(position = "jitter", size = 3, alpha = 0.5)
+```
+
+A new categorical variable will be created to address these three periods:
+```{r}
+Raw_Training_Period <- as.character(Raw_Training$Month) #Convert type of variable from factor to character
+Raw_Training_Season <- rep(NA, 36170) #Create dummy values
+for (i in 1:length(Raw_Training_Period)){
+        if (Raw_Training_Period[i] %in% c("may", "jun", "jul", "aug")) {
+                Raw_Training_Season[i] <- "high"
+        } else if (Raw_Training_Period[i] %in% c("feb", "apr", "nov")) {
+                Raw_Training_Season[i] <- "medium"
+        } else {
+                Raw_Training_Season[i] <- "low"
+        }
+}
+identical(length(Raw_Training_Season), length(Raw_Training$Month)) #Checked
+table(Raw_Training_Season) #Checked
+```
+
+Two distinct age groups addressing the number of contacts of the current market campaign:
+
+* The number of contacts drops dramatically at around 61 years old
+* A new categorical variable will be created to address these two groups
+
+```{r}
+ggplot(data = Raw_Training, aes(x = Age, 
+                                y = NumOfContacts, 
+                                color = Subscription)) +
+        geom_point(position = "jitter", size = 3, alpha = 0.5)
+
+ggplot(data = Raw_Training, aes(x = Age, 
+                                y = NumOfContacts, 
+                                color = Subscription)) +
+        geom_point(position = "jitter", size = 3, alpha = 0.5) +
+        coord_cartesian(xlim = c(55, 65)) #Zoom in the distinction
+
+nrow(Raw_Training[Raw_Training$Age > 60, ]) #935 observations
+summary(Raw_Training[Raw_Training$Age > 60, ]$Subscription) #Subscription Yes 400 : No 535
+```
+
+### 1.8 Data Preparation
+##### Manually corrected data points
+```{r}
+summary(Raw_Training[Raw_Training$PassedDays != -1, ]$Previous) #Suspicous number of the previous contact, i.e. max contact number is 275 which are not normal. If that really happened, such frequent contacts would be very annoying to client.
+nrow(Raw_Training[Raw_Training$PassedDays != -1 & Raw_Training$Previous > 100, ]) #Only 1 result having the previous contact number greater than 100 times
+Raw_Training[Raw_Training$Previous == 275,]$Previous <- 2 #Instead of removing the entire row, the value of the previous contact number was replaced by the median of 2.
+summary(Raw_Training[Raw_Training$PassedDays != -1, ]$Previous) #Checked
+```
+##### Construct new variables in training dataset
+```{r}
+Wrk_Training <- Raw_Training %>% 
+        mutate(HasPreviousContact = factor(PassedDays != -1, 
+                                           labels = c("no", "yes")),
+               AgeGreaterThan60 = factor(Age > 60, 
+                                         labels = c("no", "yes")),
+               Season = factor(Raw_Training_Season))
+# Create a categorical variable defining whether the client had been contacted previously or not.
+# Create a categorical variable defining whether the clients were greater than 60 years old or not.
+# Create a categorical variable dividing the variable, Month, into 3 seasons.
+```
+
+##### Construct new variables in testing dataset 
+```{r}
+Testing_Period <- as.character(Raw_Testing$Month)
+Testing_Season <- rep(NA, 9041)
+for (i in 1:length(Testing_Period)){
+        if (Testing_Period[i] %in% c("may", "jun", "jul", "aug")) {
+                Testing_Season[i] <- "high"
+        } else if (Testing_Period[i] %in% c("feb", "apr", "nov")) {
+                Testing_Season[i] <- "medium"
+        } else {
+                Testing_Season[i] <- "low"
+        }
+}
+
+Raw_Testing <- Raw_Testing %>% 
+        mutate(HasPreviousContact = factor(PassedDays != -1, labels = c("no", "yes")),
+               AgeGreaterThan60 = factor(Age > 60, labels = c("no", "yes")),
+               Season = factor(Testing_Season))
+```
+
+### 1.9 Basic Data Transformation
+```{r}
+table(Wrk_Training$Subscription)
+RefLine <- round(4232/31938, 2) #Reference line: 13% of successful subscription rate
+```
+* This reference line will be added into the plots.
+
+# 2.Exploratory Data Analysis
+
+### 2.1 Bar Charts of Categorical Variables with Ad-hoc A/B Test and Chi-Squared Test
+```{r}
+g <- ggplot(data = Wrk_Training, aes(fill = Subscription))
+```
+
+##### Job Types
+```{r}
+gJob1 <- g + 
+        geom_bar(aes(x = reorder_size(JobType))) +
+        coord_flip() +
+        ylab("Number of Count") +
+        xlab("Job Type") +
+        ggtitle("The Distribution of Job Types")
+
+gJob2 <- g +
+        geom_bar(aes(x = reorder_size(JobType),
+                     y = (..count..)/sum(..count..)),
+                 position = "fill") +
+        coord_flip() +
+        geom_hline(yintercept = RefLine) + #Reference line of subscription success rate:0.13
+        ylab("Percentage") +
+        xlab("Job Types") +
+        ggtitle("Ad-hoc A/B Test of each Job Types")
+
+grid.arrange(gJob1, gJob2)
+```
+
+Our visualized ad-hoc A/B test shows that job type is an important variable in deciding the subscription preference. Such result will be confirmed with a chi-squared test run below. In the plot, job types of management, retired, umemployed and student have higher percentage on subscribing term deposit and greater than our reference line. They may contribute as an important factor in our classification model in the later session. Although clients in blue-collar have the highest number in count, the subcription percentage among this category is the lowest. This may provide insight of how to target our potential client according to job types.
+
+```{r}
+xsq_test(Wrk_Training$JobType)
+```
+
+##### Marital Status
+```{r}
+gMarital1 <- g + 
+        geom_bar(aes(x = reorder_size(Marital))) +
+        ylab("Number of Count") +
+        xlab("Marital Status") +
+        ggtitle("The Distribution of Marital Status")
+
+gMarital2 <- g +
+        geom_bar(aes(x = reorder_size(Marital),
+                     y = (..count..)/sum(..count..)),
+                 position = "fill") +
+        geom_hline(yintercept = RefLine) + #Reference line of subscription success rate:0.13
+        ylab("Percentage") +
+        xlab("Marital Status") +
+        ggtitle("Ad-hoc A/B Test of each Marital Status")
+
+grid.arrange(gMarital1, gMarital2)
+```
+
+Our visualized ad-hoc A/B test shows that marital status seems to be an important variable in deciding the subscription preference. with a chi-squared test run below, its statistical significant result confirms marital status is an important varaible. In the plot, single clients have the highest percentage in subscription , which may contribute as an important factor in our classification model in the later session.
+```{r}
+xsq_test(Wrk_Training$Marital)
+```
+
+##### Education Level
+```{r}
+gEducation1 <- g + 
+        geom_bar(aes(x = reorder_size(Education))) +
+        ylab("Number of Count") +
+        xlab("Education Level") +
+        ggtitle("The Distribution of Education Level")
+
+gEducation2 <- g +
+        geom_bar(aes(x = reorder_size(Education),
+                     y = (..count..)/sum(..count..)),
+                 position = "fill") +
+        geom_hline(yintercept = RefLine) + #Reference line of subscription success rate:0.13
+        ylab("Percentage") +
+        xlab("Education Level") +
+        ggtitle("Ad-hoc A/B Test of each Education Level")
+
+grid.arrange(gEducation1, gEducation2)
+```
+
+Our visualized ad-hoc A/B test shows that education status seems to be an important variable in deciding the subscription preference. with a chi-squared test run below, its statistical significant result confirms marital status is an important varaible. In the plot, clients with tertiary or unknown education level have higher percentage in subscription , which may contribute as an important factor in our classification model in the later session.
+```{r}
+xsq_test(Wrk_Training$Education)
+```
+
+##### Credit Default Status
+```{r}
+gCreditDefault1 <- g + 
+        geom_bar(aes(x = CreditDefault)) +
+        ylab("Number of Count") +
+        xlab("Credit Default Status") +
+        ggtitle("The Distribution of Credit Default Status")
+
+gCreditDefault2 <- g +
+        geom_bar(aes(x = CreditDefault,
+                     y = (..count..)/sum(..count..)),
+                 position = "fill") +
+        geom_hline(yintercept = RefLine) + #Reference line of subscription success rate:0.13
+        ylab("Percentage") +
+        xlab("Credit Default Status") +
+        ggtitle("Ad-hoc A/B Test of each Credit Default Status")
+
+grid.arrange(gCreditDefault1, gCreditDefault2)
+```
+
+Our visualized ad-hoc A/B test shows that credit default status seems to be an important variable in deciding the subscription preference. with a chi-squared test run below, its statistical significant result confirms marital status is an important varaible. Most of the clients has no credit default and its subscription percentage is close to the reference level.
+```{r}
+xsq_test(Wrk_Training$CreditDefault)
+```
+
+##### Housing Loan Status
+```{r}
+gHousingLoan1 <- g + 
+        geom_bar(aes(x = HousingLoan)) +
+        ylab("Number of Count") +
+        xlab("Housing Loan Status") +
+        ggtitle("The Distribution of Housing Loan Status")
+
+gHousingLoan2 <- g +
+        geom_bar(aes(x = HousingLoan,
+                     y = (..count..)/sum(..count..)),
+                 position = "fill") +
+        geom_hline(yintercept = RefLine) + #Reference line of subscription success rate:0.13
+        ylab("Percentage") +
+        xlab("Housing Loan Status") +
+        ggtitle("Ad-hoc A/B Test of each Housing Loan Status")
+
+grid.arrange(gHousingLoan1, gHousingLoan2)
+```
+
+Our visualized ad-hoc A/B test shows that house loan status is an important variable in deciding the subscription preference. Such result will be confirmed with a chi-squared test run below. Also, Clients have no housing loan tends to have a higher subcription percentage which is above the reference level.
+```{r}
+xsq_test(Wrk_Training$HousingLoan)
+```
+
+##### Personal Loan Status
+```{r}
+gPersonalLoan1 <- g + 
+        geom_bar(aes(x = PersonalLoan)) +
+        ylab("Number of Count") +
+        xlab("Personal Loan Status") +
+        ggtitle("The Distribution of Personal Loan Status")
+
+gPersonalLoan2 <- g +
+        geom_bar(aes(x = PersonalLoan,
+                     y = (..count..)/sum(..count..)),
+                 position = "fill") +
+        geom_hline(yintercept = RefLine) + #Reference line of subscription success rate:0.13
+        ylab("Percentage") +
+        xlab("Personal Loan Status") +
+        ggtitle("Ad-hoc A/B Test of each Personal Loan Status")
+
+grid.arrange(gPersonalLoan1, gPersonalLoan2)
+```
+
+Our visualized ad-hoc A/B test shows that personal loan status is an important variable in deciding the subscription preference. Such result will be confirmed with a chi-squared test run below. Also, Clients have no personal loan tends to have a higher subcription percentage which is at the reference level. With the plots of housing loan and personal loan, clients have stable financial status tend to be an important factor to contribute to our classification model in our later session.
+```{r}
+xsq_test(Wrk_Training$PersonalLoan)
+```
+
+##### Contact Type of Communication
+```{r}
+gContactType1 <- g + 
+        geom_bar(aes(x = reorder_size(ContactType))) +
+        ylab("Number of Count") +
+        xlab("Contact Type") +
+        ggtitle("The Distribution of Contact Type")
+
+gContactType2 <- g +
+        geom_bar(aes(x = reorder_size(ContactType),
+                     y = (..count..)/sum(..count..)),
+                 position = "fill") +
+        geom_hline(yintercept = RefLine) + #Reference line of subscription success rate:0.13
+        ylab("Percentage") +
+        xlab("Contact Type") +
+        ggtitle("Ad-hoc A/B Test of each Contact Type")
+
+grid.arrange(gContactType1, gContactType2)
+```
+
+Our visualized ad-hoc A/B test shows that contact type of communication is an important variable in deciding the subscription preference. Such result will be confirmed with a chi-squared test run below. In the plot, using telephone and cellular have higher percentage on subscribing term deposit and greater than our reference line. They may contribute as an important factor in our classification model in the later session.
+```{r}
+xsq_test(Wrk_Training$ContactType)
+```
+
+##### Outcomes of the Previous Campaign
+```{r}
+gPreviousOutcome1 <- g + 
+        geom_bar(aes(x = reorder_size(PreviousOutcome))) +
+        ylab("Number of Count") +
+        xlab("Previous Outcome") +
+        ggtitle("The Distribution of Previous Outcome")
+
+gPreviousOutcome2 <- g +
+        geom_bar(aes(x = reorder_size(PreviousOutcome),
+                     y = (..count..)/sum(..count..)),
+                 position = "fill") +
+        geom_hline(yintercept = RefLine) + #Reference line of subscription success rate:0.13
+        ylab("Percentage") +
+        xlab("Previous Outcome") +
+        ggtitle("Ad-hoc A/B Test of each Previous Outcome")
+
+grid.arrange(gPreviousOutcome1, gPreviousOutcome2)
+```
+Our visualized ad-hoc A/B test shows that outcome of the previous marketing campaign is an important variable in deciding the subscription preference. Such result will be confirmed with a chi-squared test run below. In the plot, clients subscribed previously have the highest percentage on subscribing term deposit again and far greater than our reference line. It may contribute as an important factor in our classification model in the later session. Also, such kind of clients indicates that there are some reasons for them to subscribe again. Targetting such clients may be beneficial for the next marketing campaign.
+```{r}
+xsq_test(Wrk_Training$PreviousOutcome)
+```
+
+##### Previous Contact with the Clients
+```{r}
+gPreviousContact1 <- g + 
+        geom_bar(aes(x = HasPreviousContact)) +
+        ylab("Number of Count") +
+        xlab("Had Previous Contact") +
+        ggtitle("The Distribution of Has/Has Not Been Contacted Previously")
+
+gPreviousContact2 <- g +
+        geom_bar(aes(x = HasPreviousContact,
+                     y = (..count..)/sum(..count..)),
+                 position = "fill") +
+        geom_hline(yintercept = RefLine) + #Reference line of subscription success rate:0.13
+        ylab("Percentage") +
+        xlab("Had Previous Contact") +
+        ggtitle("Ad-hoc A/B Test of Has/Has Not Been Contacted Previously")
+
+grid.arrange(gPreviousContact1, gPreviousContact2)
+```
+Our visualized ad-hoc A/B test shows that clients have been contacted in the previous campaign is an important variable in deciding the subscription preference. Such result will be confirmed with a chi-squared test run below. clients have been contacted previously have higher percentage on subscribing term deposit and greater than our reference line. They may contribute as an important factor in our classification model in the later session.
+```{r}
+xsq_test(Wrk_Training$HasPreviousContact)
+```
+
+##### Age Groups
+```{r}
+gAgeGroup1 <- g + 
+        geom_bar(aes(x = AgeGreaterThan60)) +
+        ylab("Number of Count") +
+        xlab("Age Groups Greater than 60 Years Old") +
+        ggtitle("The Distribution of Age Groups")
+
+gAgeGroup2 <- g +
+        geom_bar(aes(x = AgeGreaterThan60,
+                     y = (..count..)/sum(..count..)),
+                 position = "fill") +
+        geom_hline(yintercept = RefLine) + #Reference line of subscription success rate:0.13
+        ylab("Percentage") +
+        xlab("Age Groups Greater than 60 Years Old") +
+        ggtitle("Ad-hoc A/B Test of each Age Groups")
+
+grid.arrange(gAgeGroup1, gAgeGroup2)
+```
+These are the follow-up plots of the 1.7 Basic Exploratory Data Analysis session. Our visualized ad-hoc A/B test shows that clients having age greater than 60 years old is an important variable in deciding the subscription preference. Such result will be confirmed with a chi-squared test run below. In the plot, such kind of clients have higher percentage on subscribing term deposit and is greater than our reference line. They may contribute as an important factor in our classification model in the later session.
+```{r}
+xsq_test(Wrk_Training$AgeGreaterThan60)
+```
+
+##### Seasonal Spread
+```{r}
+gSeason1 <- g + 
+        geom_bar(aes(x = reorder_size(Season))) +
+        ylab("Number of Count") +
+        xlab("Seasons") +
+        ggtitle("The Distribution of Seasons")
+
+gSeason2 <- g +
+        geom_bar(aes(x = reorder_size(Season),
+                     y = (..count..)/sum(..count..)),
+                 position = "fill") +
+        geom_hline(yintercept = RefLine) + #Reference line of subscription success rate:0.13
+        ylab("Percentage") +
+        xlab("Seasons") +
+        ggtitle("Ad-hoc A/B Test of each Seaons")
+
+grid.arrange(gSeason1, gSeason2)
+```
+Our visualized ad-hoc A/B test shows that season of contact is an important variable in deciding the subscription preference. Such result will be confirmed with a chi-squared test run below. In the plot, low season have the highest percentage on subscribing term deposit and greater than our reference line. They may contribute as an important factor in our classification model in the later session. Although most of the contacts is in high season, its subscription rate is the lowest.
+```{r}
+xsq_test(Wrk_Training$Season)
+```
+
+
+### 2.2 Histograms of Continuous Variables with Ad-hoc A/B Test
+
+##### Age
+```{r}
+gAge1 <- g + geom_histogram(aes(x = Age), 
+                            binwidth = 5, 
+                            color = "black") +
+        ylab("Number of Count") +
+        ggtitle("Distribution of Age")
+
+gAge2 <- g + geom_histogram(aes(x = Age, 
+                                y = (..count..)/sum(..count..)), 
+                            binwidth = 5,
+                            position = "fill", 
+                            color = "black") +
+        geom_hline(yintercept = 0.13) + #Reference line of subscription success rate:0.13
+        ylab("Percentage") +
+        ggtitle("Ad-hoc A/B Test of Age with bins = 5")
+        
+grid.arrange(gAge1, gAge2)
+```
+The histogram of the distribution of age and its corresponding ad-hoc A/B test echoes to the results of the previous plots of age group. 
+
+##### Average Yearly Balance
+```{r}
+gAvgYearlyBalance1 <- g + geom_histogram(aes(x = AvgYearlyBalance), 
+                            binwidth = 5000, 
+                            color = "black") +
+        ylab("Number of Count") +
+        xlab("Average Yearly Balance with bins = 5000") +
+        ggtitle("Distribution of Average Yearly Balance")
+
+gAvgYearlyBalance2 <- g + geom_histogram(aes(x = AvgYearlyBalance, 
+                                y = (..count..)/sum(..count..)), 
+                            binwidth = 5000,
+                            position = "fill", 
+                            color = "black") +
+        geom_hline(yintercept = 0.13) + #Reference line of subscription success rate:0.13
+        ylab("Percentage") +
+        xlab("Average Yearly Balance") +
+        ggtitle("Ad-hoc A/B Test of Average Yearly Balance with bins = 5000")
+
+grid.arrange(gAvgYearlyBalance1, gAvgYearlyBalance2)
+```
+The distribution of average yearly balance is greatly skewed to the right. Most
+clients have the average yearly balance between -2500 and 2500 Euros. Our ad-hoc A/B test shows that this variable may play an important role in deciding the clients to subcribe or not.
+
+##### Number of Contacts of each Client
+```{r}
+gNumOfContacts1 <- g + geom_histogram(aes(x = NumOfContacts), 
+                            binwidth = 5, 
+                            color = "black") +
+        ylab("Number of Count") +
+        xlab("Number of Contacts") +
+        ggtitle("Distribution of Numer Of Contacts with binds = 5")
+
+gNumOfContacts2 <- g + geom_histogram(aes(x = NumOfContacts, 
+                                y = (..count..)/sum(..count..)), 
+                            binwidth = 5,
+                            position = "fill", 
+                            color = "black") +
+        geom_hline(yintercept = 0.13) + #Reference line of subscription success rate:0.13
+        ylab("Percentage") +
+        xlab("Number of Contacts") +
+        ggtitle("Ad-hoc A/B Test of Numer Of Contacts with bins = 5")
+
+grid.arrange(gNumOfContacts1, gNumOfContacts2)
+```
+
+The distribution of number of contacts is highly skewed to the right. While the number of contacts increases, the subscription percentage decreases. By zooming in the range from 1 to 10 times of the number of contact, such result are more obvious. Our ad-hoc A/B test shows that clients being contacted once have a higher percentage in subscription.
+
+```{r}
+g1 <- ggplot(data = Wrk_Training[Wrk_Training$NumOfContacts < 10, ], 
+       aes(x = NumOfContacts, fill = Subscription)) +
+        geom_histogram(binwidth = 1,
+                       color = "black") +
+        xlab("Number of Contacts") +
+        ylab("Number of Count") +
+        ggtitle("Distribution of Numer Of Contacts Ranging from 1 to 10 Times")
+
+g2 <- ggplot(data = Wrk_Training[Wrk_Training$NumOfContacts < 10, ], 
+       aes(x = NumOfContacts,
+           y = (..count..)/sum(..count..),
+           fill = Subscription)) +
+        geom_histogram(binwidth = 1,
+                       position = "fill",
+                       color = "black") +
+        geom_hline(yintercept = 0.13) +
+        xlab("Number of Contacts") +
+        ylab("Percentage") +
+        ggtitle("Ad-hoc A/B Test of Numer Of Contacts  Ranging from 1 to 10 Times")
+
+grid.arrange(g1, g2)
+```
+
+# 3.Modelling
+
+## 3.1 Finalize the Dataset for Training and Testing
+
+#### Add Dummy Variables to Replace Factor Variables in Training Dataset
+#### Assumptions:
+* The variable, Duration, highly affects the output target (e.g., if duration=0 then y='no'). Yet, the duration is not known before a call is performed. Also, after the end of the call y is obviously known. Thus, this input would be discarded in order to have a realistic predictive model.
+* Date will be excluded in the model. Generally speacking, clients decide to subscribe or not to subscribe a bank's term deposit are not reference to date. Thus, the Day, Month, Season variables in the dataset will be excluded.
+* Variable, AgeGreaterThan60, will be excluded in modelling in order to avoid collinearity with another variable, Age, because the former one is generated based on the latter one.
+*Variable, PassedDays, will be excluded since we have created another variable, HasPreviousContact, to capture the key information and replace it.
+
+```{r}
+WithoutSubscriptionDuration <- Wrk_Training[, -c(10, 11, 12, 14, 17, 19, 20)]
+FactorVarName <- rep(NA, 13)
+for (i in 1:13) {
+        if (is.factor(WithoutSubscriptionDuration[, i])){
+                FactorVarName[i]<- colnames(WithoutSubscriptionDuration)[i]
+        } else {
+                FactorVarName[i]<- 0
+        }
+}
+
+FactorVarName <- FactorVarName[FactorVarName != "0"]
+Factor_Training <- WithoutSubscriptionDuration[, FactorVarName]
+DummyMatrix <- dummy.data.frame(Factor_Training, sep = ".")
+WithoutFactorTraining <- WithoutSubscriptionDuration[, -which(names(WithoutSubscriptionDuration) %in% FactorVarName)]
+
+Training <- cbind(WithoutFactorTraining, 
+                  DummyMatrix, 
+                  Subscription = Wrk_Training$Subscription)
+```
+
+#### Add Dummy Variables to Replace Factor Variables in Testing Dataset
+```{r}
+WithoutSubscriptionDurationTest <- Raw_Testing[, -c(10, 11, 12, 14, 17, 19, 20)]
+FactorVarName <- rep(NA, 13)
+for (i in 1:13) {
+        if (is.factor(WithoutSubscriptionDurationTest[, i])){
+                FactorVarName[i]<- colnames(WithoutSubscriptionDurationTest)[i]
+        } else {
+                FactorVarName[i]<- 0
+        }
+}
+
+FactorVarName <- FactorVarName[FactorVarName != "0"]
+Factor_Training <- WithoutSubscriptionDurationTest[, FactorVarName]
+DummyMatrix <- dummy.data.frame(Factor_Training, sep = ".")
+WithoutFactorTesting <- WithoutSubscriptionDurationTest[, -which(names(WithoutSubscriptionDurationTest) %in% FactorVarName)]
+
+Testing <- cbind(WithoutFactorTesting, 
+                 DummyMatrix, 
+                 Subscription = Raw_Testing$Subscription)
+
+```
+
+## 3.2 Use Logistic Regression to Fit the Model - Initial Model
+```{r Traing with all variables}
+#Full model fitted by 58 variables
+ModelFit <- glm(Subscription ~., data = Training, family = "binomial")
+ModelProb <- predict(ModelFit, newdata = Testing, type = "response")
+ModelPred <- ifelse(ModelProb > 0.5, "yes", "no")
+TableOriginal <- confusionMatrix(ModelPred, Testing$Subscription)
+round(summary(ModelFit)$coef, 5)
+```
+
+## 3.3 Eliminate Variables & Re-Fit the Model - Improved Model
+```{r Backward Elimination}
+#---------- Eliminate Variables with p-value = NA & Re-Fit the Model
+#>>> Variables with p-value = NA are not defined becaouse of singularities
+EliminateVarName <- c("JobType.unknown", "Marital.single", "Education.unknown", "CreditDefault.yes", "HousingLoan.yes", "PersonalLoan.yes", "ContactType.unknown",  "PreviousOutcome.unknown", "HasPreviousContact.yes")
+TrainingSubset <- Training[, -which(names(Training) %in% EliminateVarName)]
+#14 variables removed
+ModelFit <- glm(Subscription ~., data = TrainingSubset, family = "binomial")
+
+#---------- Eliminate Variables with p-value > 0.05 & Re-Fit the Model
+#>>> p-value less than 0.05 is considered to be statistical significant
+
+names(which.max(summary(ModelFit)$coefficients[, 4])) #Find the variable with highest p-value
+max(summary(ModelFit)$coefficients[, 4]) #Find its p-vlue
+ModelFit <- glm(Subscription ~.-JobType.management, data = TrainingSubset, family = "binomial")
+
+names(which.max(summary(ModelFit)$coefficients[, 4])) #Find the variable with highest p-value
+max(summary(ModelFit)$coefficients[, 4]) #Find its p-vlue
+ModelFit <- glm(Subscription ~.-JobType.management -`JobType.self-employed` , data = TrainingSubset, family = "binomial")
+
+names(which.max(summary(ModelFit)$coefficients[, 4])) #Find the variable with highest p-value
+max(summary(ModelFit)$coefficients[, 4]) #Find its p-vlue
+ModelFit <- glm(Subscription ~.-JobType.management -`JobType.self-employed` -JobType.technician, data = TrainingSubset, family = "binomial")
+
+names(which.max(summary(ModelFit)$coefficients[, 4])) #Find the variable with highest p-value
+max(summary(ModelFit)$coefficients[, 4]) #Find its p-vlue
+ModelFit <- glm(Subscription ~.-JobType.management -`JobType.self-employed` -JobType.technician -`JobType.blue-collar`, data = TrainingSubset, family = "binomial")
+
+names(which.max(summary(ModelFit)$coefficients[, 4])) #Find the variable with highest p-value
+max(summary(ModelFit)$coefficients[, 4]) #Find its p-vlue
+ModelFit <- glm(Subscription ~.-JobType.management -`JobType.self-employed` -JobType.technician -`JobType.blue-collar` -JobType.services, data = TrainingSubset, family = "binomial")
+
+names(which.max(summary(ModelFit)$coefficients[, 4])) #Find the variable with highest p-value
+max(summary(ModelFit)$coefficients[, 4]) #Find its p-vlue
+ModelFit <- glm(Subscription ~.-JobType.management -`JobType.self-employed` -JobType.technician -`JobType.blue-collar` -JobType.services -JobType.housemaid, data = TrainingSubset, family = "binomial")
+
+names(which.max(summary(ModelFit)$coefficients[, 4])) #Find the variable with highest p-value
+max(summary(ModelFit)$coefficients[, 4]) #Find its p-vlue
+ModelFit <- glm(Subscription ~.-JobType.management -`JobType.self-employed` -JobType.technician -`JobType.blue-collar` -JobType.services -JobType.housemaid -PreviousOutcome.success, data = TrainingSubset, family = "binomial")
+
+names(which.max(summary(ModelFit)$coefficients[, 4])) #Find the variable with highest p-value
+max(summary(ModelFit)$coefficients[, 4]) #Find its p-vlue
+ModelFit <- glm(Subscription ~.-JobType.management -`JobType.self-employed` -JobType.technician -`JobType.blue-collar` -JobType.services -JobType.housemaid -PreviousOutcome.success -Education.tertiary, data = TrainingSubset, family = "binomial")
+
+names(which.max(summary(ModelFit)$coefficients[, 4])) #Find the variable with highest p-value
+max(summary(ModelFit)$coefficients[, 4]) #Find its p-vlue
+ModelFit <- glm(Subscription ~.-JobType.management -`JobType.self-employed` -JobType.technician -`JobType.blue-collar` -JobType.services -JobType.housemaid -PreviousOutcome.success -Education.tertiary -JobType.entrepreneur, data = TrainingSubset, family = "binomial")
+
+names(which.max(summary(ModelFit)$coefficients[, 4])) #Find the variable with highest p-value
+max(summary(ModelFit)$coefficients[, 4]) #Find its p-vlue
+ModelFit <- glm(Subscription ~.-JobType.management -`JobType.self-employed` -JobType.technician -`JobType.blue-collar` -JobType.services -JobType.housemaid -PreviousOutcome.success -Education.tertiary -JobType.entrepreneur -CreditDefault.no, data = TrainingSubset, family = "binomial")
+
+names(which.max(summary(ModelFit)$coefficients[, 4])) #Find the variable with highest p-value
+max(summary(ModelFit)$coefficients[, 4]) #Find its p-vlue
+ModelFit <- glm(Subscription ~.-JobType.management -`JobType.self-employed` -JobType.technician -`JobType.blue-collar` -JobType.services -JobType.housemaid -PreviousOutcome.success -Education.tertiary -JobType.entrepreneur -CreditDefault.no -Marital.divorced, data = TrainingSubset, family = "binomial")
+
+names(which.max(summary(ModelFit)$coefficients[, 4])) #Find the variable with highest p-value
+max(summary(ModelFit)$coefficients[, 4]) #Find its p-vlue
+ModelFit <- glm(Subscription ~.-JobType.management -`JobType.self-employed` -JobType.technician -`JobType.blue-collar` -JobType.services -JobType.housemaid -PreviousOutcome.success -Education.tertiary -JobType.entrepreneur -CreditDefault.no -Marital.divorced -Age, data = TrainingSubset, family = "binomial")
+
+names(which.max(summary(ModelFit)$coefficients[, 4]))
+max(summary(ModelFit)$coefficients[, 4])  #Reach the first variable's p-value equal to orlower than 0.05
+ModelFitBest <- ModelFit #Store our final model for further interpretation
+
+#>>> Test the Improved Model with the Testing Dataset
+ModelProb <- predict(ModelFitBest, newdata = Testing, type = "response")
+ModelPred <- ifelse(ModelProb > 0.5, "yes", "no")
+TableBest <- confusionMatrix(ModelPred, Testing$Subscription)
+round(summary(ModelFitBest)$coef, 5)
+```
+
+## 3.4 Assess and Interpret the Model
+```{r Accuracy}
+round(TableOriginal$overall, 4)  #Accuracy of the initial model
+round(TableBest$overall, 4)   #Accuracy of the improved model
+```
+
+Our model achieves 89.12% accuracy of predicting if the clients will subcribe the term deposit or not. Such accuracy rate is impressive. In order to consolidate such result, a cumulative accuracy profile(CAP) curve will be constructed to illustrate it. 
+
+Although the accuracy drops from 89.13% to 89.12%, the decrease is very slightly. At the expense of that, the readability of our model increases. Since all the variables in our final model have p-value less than 5%, meaning statistically significant, their positive or negative signs provide evidence to interpret the model. 
+
+The following variables detract our model:
+```{r}
+ModelCoef <- round(data.frame(summary(ModelFitBest)$coef), 5)
+#Extract the coefficient table and round to 5 decimal points
+rownames(ModelCoef[ModelCoef$Estimate < 0, ])
+```
+The above variables matches to the results in the previous session regarding the ad-hoc A/B tests, meaning that clients having these characteristics tend NOT to subscribe a bank's term deposit. Among these variables, no previous contacts, negative previous outcome and other previous outcome have the largest negative coefficients, which are -2.36, -2.39, -2.01 respectively. They have a higher level of per-unit association of the subsciption preference. Others' coefficients are between 0 and -1. They are number of contacts, married marital, primary education and secondary education. 
+
+
+The following variables contribute to our model:
+```{r}
+ModelCoef <- round(data.frame(summary(ModelFitBest)$coef), 5)
+#Extract the coefficient table and round to 5 decimal points
+rownames(ModelCoef[ModelCoef$Estimate > 0, ])
+```
+The above variables matches to the results in the previous session regarding the ad-hoc A/B tests, meaning that clients having these characteristics tend to subscribe a bank's term deposit. Ranging their coefficients from largest(1.01) to lowest(0.00002), they are contact with cellular, contact with telephone, the retired, students, no housing loan, no personal loan, the unemmployed, job in administration, having previous contact, and average yearly balance. Thus, the level of per-unit association of the subscription preference decreases with such arranged coefficients.
+
+## 3.5 Assess the Model with Cumulative Accuracy Profile(CAP) Curve
+```{r CAP Curve}
+#---------------- Cumulative Accuracy Profile Curve of the Model
+ModelProb <- predict(ModelFitBest, newdata = TrainingSubset, type = "response")
+SubscriptionBinary <- ifelse(TrainingSubset$Subscription == "no", 0, 1)
+SubscriptionBinary <- as.integer(SubscriptionBinary)
+ModelForecast <- data.frame(Subscription = SubscriptionBinary, Probability = ModelProb)
+
+#>>>>> Building CAP Curve
+ModelForecast <- arrange(ModelForecast, desc(Probability)) #Order the subscription probability in descending order
+TotalSubscribed <- sum(ModelForecast$Subscription) #4232 subscribed
+TotalRecords <- nrow(ModelForecast) #36170 total number of clients
+SubscribedRatio <- round(TotalSubscribed / TotalRecords, 3) #11.7% subscribed
+TotalSelect <- 1:nrow(ModelForecast) 
+TotalSelectPercentage <- round(TotalSelect / TotalRecords, 1) #In %
+RandomSelect <- TotalSelect * SubscribedRatio
+RandomSelectPercentage <- round(RandomSelect / TotalSubscribed, 1) #In %
+ModelSelect <- cumsum(ModelForecast$Subscription)
+ModelSelectPercentage <- round(ModelSelect / TotalSubscribed, 1) #In %
+CapCurveTable01 <- data.frame(TotalSelect, TotalSelectPercentage, RandomSelect, RandomSelectPercentage, ModelSelect, ModelSelectPercentage)
+#>>>Plotting CAP Curve of the Model
+g <- ggplot(data = CapCurveTable01, aes(x = TotalSelectPercentage, y = ModelSelectPercentage))
+g1 <- g + geom_smooth(color = "blue") +
+        geom_smooth(aes(y = RandomSelectPercentage), color = "green") +
+        geom_vline(xintercept = 0.5, color = "black", size = 1, linetype = 2) +
+        geom_hline(yintercept = 0.78, color = "red", linetype = 2) +
+        ggtitle("Cumulative Profile Accuracy Curve of the Model") +
+        xlab("Total Contacted Percentage") +
+        ylab("Subcription Percentage")
+
+#---------------- Cumulative Accuracy Profile Curve of Testing Data
+ModelProb <- predict(ModelFitBest, newdata = Testing, type = "response")
+SubscriptionBinary <- ifelse(Testing$Subscription == "no", 0, 1)
+SubscriptionBinary <- as.integer(SubscriptionBinary)
+ModelForecast <- data.frame(Subscription = SubscriptionBinary, Probability = ModelProb)
+
+#>>>>> Building CAP Curve
+ModelForecast <- arrange(ModelForecast, desc(Probability)) #Order the subscription probability in descending order
+TotalSubscribed <- sum(ModelForecast$Subscription) #1057 subscribed
+TotalRecords <- nrow(ModelForecast) #9041 total number of clients
+SubscribedRatio <- round(TotalSubscribed / TotalRecords, 3) #11.7% subscribed
+TotalSelect <- 1:nrow(ModelForecast)
+TotalSelectPercentage <- round(TotalSelect / TotalRecords, 1) #In %
+RandomSelect <- TotalSelect * SubscribedRatio
+RandomSelectPercentage <- round(RandomSelect / TotalSubscribed, 1) #In %
+ModelSelect <- cumsum(ModelForecast$Subscription)
+ModelSelectPercentage <- round(ModelSelect / TotalSubscribed, 1) #In %
+CapCurveTable02 <- data.frame(TotalSelect, TotalSelectPercentage, RandomSelect, RandomSelectPercentage, ModelSelect, ModelSelectPercentage)
+#>>>Plotting CAP Curve of Testing Data
+g <- ggplot(data = CapCurveTable02, aes(y = ModelSelectPercentage, x = TotalSelectPercentage))
+g2 <- g + geom_smooth(color = "blue") +
+        geom_smooth(aes(y = RandomSelectPercentage), color = "green") +
+        geom_vline(xintercept = 0.5, color = "black", size = 1, linetype = 2) +
+        geom_hline(yintercept = 0.79, color = "red", linetype = 2) +
+        ggtitle("Cumulative Profile Accuracy Curve of Testing Data") +
+        xlab("Total Contacted Percentage") +
+        ylab("Subcription Percentage")
+
+(CapCurve <- grid.arrange(g1, g2))
+```
+#### Interpretation of CAP Curve:
+* The blue curve is our model's performance
+* The green line is a random model's performance
+* Let X be the horizontal line in the graphs
+* X < 60% : The model is rubbish
+* 60% < X < 70% : The model is poor
+* 70% < X < 80% : The model is good
+* 80% < X < 90% : The model is very good
+* 90% < X < 100% : The model is too good (!!!Overfitting)
+
+The X in the upper plot and lower plot is 78% and 79% respectively, indicating our model is good. The vertical line cuts the 50% on the x-axis. Its intercept with the curve means that when contacting half of the total number of clients, what is the percentage of the clients will subscribe the term deposit. In the above case, our model figures out in half of the total number of clients, 78% of them will subscibe the product.
+
+# 4.Insights & Conclusion
+### 4.1 Insights from the Logistic Regression Model
+#### 4.1.1 Change the Coefficients in our Model into Odds to Facilitate Interpretation
+```{r summary table}
+SummaryTable <- data.frame(round(summary(ModelFitBest)$coef, 5))
+OddRatio <- round(exp(SummaryTable$Estimate), 3)
+SummaryTable <- cbind(SummaryTable, OddRatio = OddRatio)
+SummaryTable   #The last column is the odd ratios
+```
+#### 4.1.2 Interpretate Odd Ratios
+* By holding everything else constant, increasing an independent variable by 1 unit will increase the odds by a multiplicative factor of its corresponding odd ratio.
+* For instance, increasing 1 more time in the number of contact will decrease the odd by 0.897. Thus, the probability of subcription will decrease consequently.
+* For instance, increasing 1 more unit in student will increase the odd by 1.815, and thus increase the probability of subscription.
+* The bank should be aware of those detracting variables when planning marketing strategies for different clients.
+* Variables with odd ratio greater than 1 bring positive result on subscripton. They should be considered wisely in the marketing campaign.
+
+### 4.2 Insights from the CAP Curve
+#### 4.2.1 Segment Clients by Likelihood Score
+* The subscription probability of each client has been organized in decending order.
+* The bank is able to segment the clients into different percentil.
+* The bank is able to plan different marketing strategies to address different segments.
+
+#### 4.2.2 Budget Constraints
+* The CAP curve of our model is better than that of the random model.
+* The bank is able to decide which clients to target at when there is budget limits, i.e. as the case in our project, when the budget can only support calling 50% of the clients, our model can reach 78% among those who will subscirbe a term deposit.
+
+#### 4.2.3 Efficiency
+* The bank can save cost from reaching the targeted clients who are more likely to subscribe a term deposit by approaching a certain percent of the total clients.
+* In our case of this project, when reaching 63% of the total clients, the bank has already approached 88% of those who are more likely to subscribe.
+
+
+# 5.Source of Reference
+1. UC Irvine Machine Learning Repository 
+2. [Moro et al., 2014] S. Moro, P. Cortez and P. Rita. A Data-Driven Approach to Predict the Success of Bank Telemarketing. Decision Support Systems, Elsevier, 62:22-31, June 2014
